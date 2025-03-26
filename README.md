@@ -29,6 +29,6 @@ A flexible and customizable bot for hosting quiz competitions on your Discord se
    cd discord-quiz-bot
    pip install -r requirements.txt
    pip install discord.py openpyxl
-	3.	Configure the Bot:
 	•	Replace "BOT_TOKEN_HERE" in the code with your actual Discord bot token.
 	•	Set the ALLOWED_ROLE_ID to the role ID that should have access to the commands
+   	•       !helpcommand : Displays this help menu with descriptions for all available commands.
