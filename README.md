@@ -35,6 +35,4 @@ A flexible and customizable bot for hosting quiz competitions on your Discord se
 
 
 
-
-
  
