@@ -5,18 +5,19 @@ import time
 import random
 from openpyxl import Workbook
 import os
+import io
 
-# Only users with a specific role can use the commands.
-ALLOWED_ROLE_ID = ROLEID # Replace with your allowed role's ID.
+# Only allow users with a specific role to use the commands.
+ALLOWED_ROLE_ID = ROLEID  # Replace ROLEID with your actual allowed role's ID (e.g., 123456789012345678).
 
-# Intents settings: For message content and member info.
+# Intents configuration: For message content and member info.
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Global check: Delete unauthorized command messages silently.
+# Global check: Silently delete unauthorized command messages.
 @bot.check
 async def globally_restrict(ctx):
     if ctx.guild is None:
@@ -36,19 +37,20 @@ async def on_command_error(ctx, error):
         return
     raise error
 
-# Global data:
+# Global data storage:
 quizzes = {}           # quizzes[quiz_name] = [question1, question2, ...]
-# Each question: {"question": str, "options": [str, ...], "correct_answer_index": int, "duration": int}
+# Each question example: {"question": str, "options": [str, ...], "correct_answer_index": int, "duration": int}
 quiz_settings = {}     # quiz_settings[quiz_name] = { "shuffle": bool, "auto_show_answer": bool, "auto_show_fastest": bool, "feedback_correct": bool, "feedback_wrong": bool, "leaderboard_count": int, "leaderboard_mention": bool }
 ongoing_quizzes = {}   # ongoing_quizzes[quiz_name] = bool (stop flag)
 last_question_info = {}  # last_question_info[quiz_name] = { "correct_answer": str, "all_options": [str, ...], "fastest": str, "fastest_time": float }
 quiz_leaderboards = {}  # quiz_leaderboards[quiz_name] = { user_id: score, ... }
+all_participants = {}  # all_participants[quiz_name] = set(user_id, ...)
 
 # --- DYNAMIC QUIZ VIEW ---
 class QuizView(discord.ui.View):
     def __init__(self, question_data, total_time=20):
         super().__init__(timeout=None)
-        self.question_data = question_data  # Should include "quiz_name"
+        self.question_data = question_data  # Must include "quiz_name"
         self.start_time = time.time()
         self.total_time = total_time
         self.responses = {}
@@ -61,6 +63,12 @@ class QuizView(discord.ui.View):
 
     async def handle_answer(self, interaction: discord.Interaction, answer_index: int):
         user_id = interaction.user.id
+        quiz_name = self.question_data.get("quiz_name", "")
+        # Update global participants list:
+        if quiz_name not in all_participants:
+            all_participants[quiz_name] = set()
+        all_participants[quiz_name].add(user_id)
+        
         if user_id in self.responses:
             await interaction.response.send_message("You have already answered this question!", ephemeral=True)
             return
@@ -73,7 +81,6 @@ class QuizView(discord.ui.View):
             "answer_time": elapsed
         }
         msg = f"You answered correctly in {elapsed:.2f} seconds!" if correct else "You answered incorrectly!"
-        quiz_name = self.question_data.get("quiz_name", "")
         if correct:
             if quiz_settings.get(quiz_name, {}).get("feedback_correct", True):
                 await interaction.response.send_message(msg, ephemeral=True)
@@ -85,7 +92,7 @@ class QuizView(discord.ui.View):
 async def on_ready():
     print(f"Bot {bot.user} logged in.")
 
-# Command: Create a new quiz.
+# !createquiz - Creates a new quiz.
 @bot.command(name="createquiz")
 async def create_quiz(ctx, quiz_name: str):
     if quiz_name in quizzes:
@@ -104,7 +111,7 @@ async def create_quiz(ctx, quiz_name: str):
     ongoing_quizzes[quiz_name] = False
     await ctx.send(f"Quiz **{quiz_name}** created. You can now add questions.")
 
-# Command: Add a single question (alias: !a).
+# !addq (alias: !a) - Adds a single question.
 @bot.command(name="addq", aliases=["a"])
 async def add_question_simple(ctx, quiz_name: str, duration: int, correct_index: int, *, content: str):
     if quiz_name not in quizzes:
@@ -127,7 +134,7 @@ async def add_question_simple(ctx, quiz_name: str, duration: int, correct_index:
     })
     await ctx.send(f"Question added to **{quiz_name}**. Total questions: {len(quizzes[quiz_name])}")
 
-# Command: Bulk add questions.
+# !bulkadd - Bulk adds questions.
 @bot.command(name="bulkadd")
 async def bulk_add(ctx, quiz_name: str, *, content: str):
     if quiz_name not in quizzes:
@@ -157,7 +164,7 @@ async def bulk_add(ctx, quiz_name: str, *, content: str):
         added += 1
     await ctx.send(f"{added} questions added to **{quiz_name}**.")
 
-# Command: List existing quizzes.
+# !listquizzes - Lists all existing quizzes.
 @bot.command(name="listquizzes")
 async def list_quizzes(ctx):
     if not quizzes:
@@ -168,7 +175,7 @@ async def list_quizzes(ctx):
         msg += f"- {qz} (Total questions: {len(quizzes[qz])})\n"
     await ctx.send(msg)
 
-# Command: Delete a quiz (and its Excel results file if available).
+# !deletequiz - Deletes the specified quiz and its Excel file if available.
 @bot.command(name="deletequiz")
 async def delete_quiz(ctx, quiz_name: str):
     if quiz_name not in quizzes:
@@ -183,6 +190,8 @@ async def delete_quiz(ctx, quiz_name: str):
         del last_question_info[quiz_name]
     if quiz_name in quiz_leaderboards:
         del quiz_leaderboards[quiz_name]
+    if quiz_name in all_participants:
+        del all_participants[quiz_name]
     filename = f"{quiz_name}_results.xlsx"
     if os.path.exists(filename):
         try:
@@ -193,7 +202,7 @@ async def delete_quiz(ctx, quiz_name: str):
     else:
         await ctx.send(f"Quiz **{quiz_name}** deleted. (No Excel file found.)")
 
-# Command: Edit a question.
+# !editq - Edits an existing question (question_index is 1-based).
 @bot.command(name="editq")
 async def edit_question(ctx, quiz_name: str, question_index: int, duration: int, correct_index: int, *, content: str):
     if quiz_name not in quizzes:
@@ -220,7 +229,7 @@ async def edit_question(ctx, quiz_name: str, question_index: int, duration: int,
     }
     await ctx.send(f"Question {question_index} in **{quiz_name}** updated.")
 
-# Command: Set shuffle mode (renamed command remains in English).
+# !mixquestions - Sets the shuffle mode for the quiz.
 @bot.command(name="mixquestions")
 async def set_shuffle(ctx, quiz_name: str, mode: str):
     if quiz_name not in quizzes:
@@ -232,7 +241,7 @@ async def set_shuffle(ctx, quiz_name: str, mode: str):
     quiz_settings[quiz_name]["shuffle"] = state
     await ctx.send(f"Shuffle mode for **{quiz_name}** set to {'active' if state else 'inactive'}.")
 
-# Old toggle commands for feedback messages.
+# !togglecorrect - Enables/disables correct feedback messages.
 @bot.command(name="togglecorrect")
 async def toggle_correct(ctx, quiz_name: str, mode: str):
     if quiz_name not in quiz_settings:
@@ -242,6 +251,7 @@ async def toggle_correct(ctx, quiz_name: str, mode: str):
     quiz_settings[quiz_name]["feedback_correct"] = state
     await ctx.send(f"'Correct answer' feedback for **{quiz_name}** will be {'shown' if state else 'hidden'}.")
 
+# !togglewrong - Enables/disables incorrect feedback messages.
 @bot.command(name="togglewrong")
 async def toggle_wrong(ctx, quiz_name: str, mode: str):
     if quiz_name not in quiz_settings:
@@ -251,7 +261,7 @@ async def toggle_wrong(ctx, quiz_name: str, mode: str):
     quiz_settings[quiz_name]["feedback_wrong"] = state
     await ctx.send(f"'Incorrect answer' feedback for **{quiz_name}** will be {'shown' if state else 'hidden'}.")
 
-# New toggle commands: Auto-show correct answer.
+# !toggleanswer - Enables/disables auto-show correct answer.
 @bot.command(name="toggleanswer")
 async def toggle_answer_cmd(ctx, quiz_name: str, mode: str):
     if quiz_name not in quiz_settings:
@@ -261,7 +271,7 @@ async def toggle_answer_cmd(ctx, quiz_name: str, mode: str):
     quiz_settings[quiz_name]["auto_show_answer"] = state
     await ctx.send(f"Auto-show correct answer for **{quiz_name}** is now {'enabled' if state else 'disabled'}.")
 
-# New toggle commands: Auto-show fastest answer.
+# !togglefastest - Enables/disables auto-show fastest correct answer.
 @bot.command(name="togglefastest")
 async def toggle_fastest(ctx, quiz_name: str, mode: str):
     if quiz_name not in quiz_settings:
@@ -271,7 +281,7 @@ async def toggle_fastest(ctx, quiz_name: str, mode: str):
     quiz_settings[quiz_name]["auto_show_fastest"] = state
     await ctx.send(f"Auto-show fastest answer for **{quiz_name}** is now {'enabled' if state else 'disabled'}.")
 
-# New command: Set leaderboard settings.
+# !setleaderboard - Sets the leaderboard settings.
 @bot.command(name="setleaderboard")
 async def set_leaderboard(ctx, quiz_name: str, count: int, mention: str):
     if quiz_name not in quiz_settings:
@@ -287,7 +297,7 @@ async def set_leaderboard(ctx, quiz_name: str, count: int, mention: str):
     quiz_settings[quiz_name]["leaderboard_mention"] = mention_bool
     await ctx.send(f"Leaderboard settings for **{quiz_name}** updated: Top {count} and will be shown as {'mentions' if mention_bool else 'names only'}.")
 
-# Command: Stop the quiz.
+# !stopquiz - Stops the active quiz.
 @bot.command(name="stopquiz")
 async def stop_quiz(ctx, quiz_name: str):
     if quiz_name not in ongoing_quizzes:
@@ -296,7 +306,7 @@ async def stop_quiz(ctx, quiz_name: str):
     ongoing_quizzes[quiz_name] = True
     await ctx.send(f"Quiz **{quiz_name}** is being stopped...")
 
-# Command: Start the quiz.
+# !startquiz - Starts the quiz.
 @bot.command(name="startquiz")
 async def start_quiz(ctx, quiz_name: str, shuffle: str = "default"):
     if quiz_name not in quizzes:
@@ -315,6 +325,8 @@ async def start_quiz(ctx, quiz_name: str, shuffle: str = "default"):
         shuffle_flag = shuffle.lower() in ["true", "shuffle", "yes", "1"]
 
     total_scores = {}
+    all_participants[quiz_name] = set()
+
     for idx, qdata in enumerate(question_list, start=1):
         if ongoing_quizzes.get(quiz_name, False):
             await ctx.send(f"Quiz **{quiz_name}** was stopped by a user.")
@@ -370,11 +382,6 @@ async def start_quiz(ctx, quiz_name: str, shuffle: str = "default"):
                 score_award = 0
             total_scores[uid] = total_scores.get(uid, 0) + score_award
 
-        # Ensure all participants are included, even if they scored 0.
-        for uid in view.responses:
-            if uid not in total_scores:
-                total_scores[uid] = 0
-
         if correct_responses:
             fastest_user_id, fastest_data = correct_responses[0]
             fastest_user_name = fastest_data["username"]
@@ -399,6 +406,12 @@ async def start_quiz(ctx, quiz_name: str, shuffle: str = "default"):
         await asyncio.sleep(3)
 
     await ctx.send("Quiz completed. Thank you for participating!")
+    
+    participants = all_participants.get(quiz_name, set())
+    for uid in participants:
+        if uid not in total_scores:
+            total_scores[uid] = 0
+
     quiz_leaderboards[quiz_name] = total_scores
     if total_scores:
         wb = Workbook()
@@ -413,6 +426,7 @@ async def start_quiz(ctx, quiz_name: str, shuffle: str = "default"):
         filename = f"{quiz_name}_results.xlsx"
         wb.save(filename)
 
+# !sendresults - Sends the quiz's Excel results file to Discord.
 @bot.command(name="sendresults")
 async def send_results(ctx, quiz_name: str):
     filename = f"{quiz_name}_results.xlsx"
@@ -421,6 +435,7 @@ async def send_results(ctx, quiz_name: str):
     else:
         await ctx.send(f"No Excel file found for quiz **{quiz_name}**.")
 
+# !showanswer - Shows the correct answer and options for the last question.
 @bot.command(name="showanswer")
 async def show_answer(ctx, quiz_name: str):
     if quiz_name not in last_question_info:
@@ -430,6 +445,7 @@ async def show_answer(ctx, quiz_name: str):
     options_str = ", ".join(info["all_options"])
     await ctx.send(f"Correct answer: **{info['correct_answer']}**\nOptions: {options_str}")
 
+# !fastest - Shows the fastest correct answer details for the last question.
 @bot.command(name="fastest")
 async def fastest_answer(ctx, quiz_name: str):
     if quiz_name not in last_question_info:
@@ -441,6 +457,7 @@ async def fastest_answer(ctx, quiz_name: str):
         return
     await ctx.send(f"Fastest correct answer: **{info['fastest']}** ({info['fastest_time']:.2f} sec)")
 
+# !showquiz - Lists all questions and correct answers of the quiz.
 @bot.command(name="showquiz")
 async def show_quiz(ctx, quiz_name: str):
     if quiz_name not in quizzes:
@@ -453,6 +470,7 @@ async def show_quiz(ctx, quiz_name: str):
         msg += f"{i}. {q['question']}\nOptions: {options}\nCorrect answer: **{correct}**\n\n"
     await ctx.send(msg)
 
+# !leaderboard - Shows the leaderboard (top entries) for the quiz.
 @bot.command(name="leaderboard")
 async def leaderboard(ctx, quiz_name: str):
     if quiz_name not in quiz_leaderboards:
@@ -468,13 +486,11 @@ async def leaderboard(ctx, quiz_name: str):
     msg = f"**{quiz_name}** Leaderboard (Top {lb_count}):\n"
     for rank, (user_id, score) in enumerate(sorted_scores, start=1):
         member = ctx.guild.get_member(user_id)
-        if member:
-            user_str = member.mention if lb_mention else member.name
-        else:
-            user_str = f"Unknown({user_id})"
+        user_str = member.mention if (member and lb_mention) else (member.name if member else f"Unknown({user_id})")
         msg += f"{rank}. {user_str} - {score} points\n"
     await ctx.send(msg)
 
+# !quizsettings - Lists the settings for all quizzes.
 @bot.command(name="quizsettings")
 async def quiz_settings_cmd(ctx):
     if not quizzes:
@@ -512,21 +528,28 @@ async def quiz_settings_cmd(ctx):
         )
     await ctx.send(embed=embed)
 
-@bot.command(name="helpcommand")
-async def help_command(ctx):
-    bulk_example = (
-        "!bulkadd \n"
-        "30|1|What is L1?|Option A|Option B|Option C \n"
-        "20|0|Favorite color?|Blue|Red|Green|Yellow \n"
-        "25|2|Which planet is known as the Red Planet?|Earth|Venus|Mars \n"
-        "30|1|Capital of Turkey?|Istanbul|Ankara|Izmir \n"
-        "20|0|What is 2+2?|3|4|5 \n"
-        "30|2|Which language is used for Android development?|Java|Kotlin|Swift|Python \n"
-        "25|0|Who painted the Mona Lisa?|Da Vinci|Picasso|Van Gogh \n"
-        "30|1|Chemical symbol for Gold?|Au|Ag|Pt \n"
-        "20|2|Largest ocean on Earth?|Atlantic|Indian|Pacific \n"
-        "30|0|Currency of Japan?|Yen|Dollar|Euro"
-    )
+# !quizidlist - Lists participant IDs for the specified quiz in a TXT file.
+@bot.command(name="quizidlist")
+async def quiz_id_list(ctx, quiz_name: str):
+    if quiz_name not in all_participants or not all_participants[quiz_name]:
+        await ctx.send(f"No participants found for quiz **{quiz_name}**.")
+        return
+    id_list = list(all_participants[quiz_name])
+    id_list.sort()
+    lines = []
+    for i in range(0, len(id_list), 150):
+        group = id_list[i:i+150]
+        line = " ".join(str(user_id) for user_id in group)
+        lines.append(line)
+    text = "\n".join(lines)
+    file_object = io.StringIO(text)
+    file_object.name = f"quizidlist_{quiz_name}.txt"
+    await ctx.send(file=discord.File(file_object))
+    file_object.close()
+
+# !quizhelp - Displays the help menu with all commands.
+@bot.command(name="quizhelp")
+async def quiz_help(ctx):
     help_text = (
         "Quiz Bot Help Menu\n"
         "You can create a quiz, add questions, edit questions, stop a quiz, run the quiz, send the results as an Excel file (only via !sendresults), and view information about the last question.\n\n"
@@ -574,8 +597,9 @@ async def help_command(ctx):
         "!showquiz <quiz_name>: List all questions and correct answers of the quiz.\n"
         "!leaderboard <quiz_name>: Show the leaderboard (top entries) for the quiz.\n"
         "!quizsettings: List the settings for all quizzes.\n"
-        "!ping: Simple test command. Replies with 'Pong!'.\n"
-        "!helpcommand: Show this help menu."
+        "!quizidlist <quiz_name>: List participant IDs (every 150 IDs on a new line) in a TXT file.\n"
+        "!quizhelp - Show this help menu.\n"
+        "!ping - Test command, replies with 'Pong!'."
     )
     if len(help_text) <= 2000:
         await ctx.send(help_text)
@@ -583,6 +607,7 @@ async def help_command(ctx):
         for i in range(0, len(help_text), 2000):
             await ctx.send(help_text[i:i+2000])
 
+# !ping - Test command.
 @bot.command(name="ping")
 async def ping(ctx):
     await ctx.send("Pong!")
