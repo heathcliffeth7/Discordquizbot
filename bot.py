@@ -6,6 +6,10 @@ import random
 from openpyxl import Workbook
 import os
 import io
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Only allow users with a specific role to use the commands.
 ALLOWED_ROLE_ID = ROLEID  # Replace ROLEID with your actual allowed role's ID (e.g., 123456789012345678).
@@ -374,8 +378,8 @@ async def start_quiz(ctx, quiz_name: str, shuffle: str = "default"):
 
         correct_responses = [(uid, data) for uid, data in view.responses.items() if data["correct"]]
         correct_responses.sort(key=lambda x: x[1]["answer_time"])
-        base_score = 1000
-        score_step = 100
+        base_score = 10000  # Updated base score
+        score_step = 1      # Updated score step
         for rank, (uid, data) in enumerate(correct_responses, start=1):
             score_award = base_score - (rank - 1) * score_step
             if score_award < 0:
@@ -425,6 +429,10 @@ async def start_quiz(ctx, quiz_name: str, shuffle: str = "default"):
             ws.append([str(user_id), username, score])
         filename = f"{quiz_name}_results.xlsx"
         wb.save(filename)
+        
+        # Automatically post leaderboard
+        if quiz_leaderboards.get(quiz_name):
+            await ctx.invoke(bot.get_command('leaderboard'), quiz_name=quiz_name)
 
 # !sendresults - Sends the quiz's Excel results file to Discord.
 @bot.command(name="sendresults")
@@ -612,4 +620,4 @@ async def quiz_help(ctx):
 async def ping(ctx):
     await ctx.send("Pong!")
 
-bot.run("BOT_TOKEN_HERE")
+bot.run(os.getenv("QUIZBOTTOKEN"))
