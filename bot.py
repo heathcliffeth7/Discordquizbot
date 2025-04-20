@@ -6,13 +6,9 @@ import random
 from openpyxl import Workbook
 import os
 import io
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
 
 # Only allow users with a specific role to use the commands.
-ALLOWED_ROLE_ID = ROLEID  # Replace ROLEID with your actual allowed role's ID (e.g., 123456789012345678).
+ALLOWED_ROLE_ID = 1346562716680192012  # Replace ROLEID with your actual allowed role's ID (e.g., 123456789012345678).
 
 # Intents configuration: For message content and member info.
 intents = discord.Intents.default()
@@ -378,8 +374,8 @@ async def start_quiz(ctx, quiz_name: str, shuffle: str = "default"):
 
         correct_responses = [(uid, data) for uid, data in view.responses.items() if data["correct"]]
         correct_responses.sort(key=lambda x: x[1]["answer_time"])
-        base_score = 10000  # Updated base score
-        score_step = 1      # Updated score step
+        base_score = 10000
+        score_step = 1
         for rank, (uid, data) in enumerate(correct_responses, start=1):
             score_award = base_score - (rank - 1) * score_step
             if score_award < 0:
@@ -429,10 +425,20 @@ async def start_quiz(ctx, quiz_name: str, shuffle: str = "default"):
             ws.append([str(user_id), username, score])
         filename = f"{quiz_name}_results.xlsx"
         wb.save(filename)
-        
-        # Automatically post leaderboard
-        if quiz_leaderboards.get(quiz_name):
-            await ctx.invoke(bot.get_command('leaderboard'), quiz_name=quiz_name)
+
+        # Post leaderboard automatically
+        lb_count = quiz_settings.get(quiz_name, {}).get("leaderboard_count", 10)
+        lb_mention = quiz_settings.get(quiz_name, {}).get("leaderboard_mention", True)
+        sorted_scores = sorted(total_scores.items(), key=lambda x: x[1], reverse=True)[:lb_count]
+        leaderboard_msg = f"**{quiz_name}** Leaderboard (Top {lb_count}):\n"
+        for rank, (user_id, score) in enumerate(sorted_scores, start=1):
+            member = ctx.guild.get_member(user_id)
+            if member and lb_mention:
+                user_str = member.mention
+            else:
+                user_str = member.name if member else f"Unknown({user_id})"
+            leaderboard_msg += f"{rank}. {user_str} - {score} points\n"
+        await ctx.send(leaderboard_msg)
 
 # !sendresults - Sends the quiz's Excel results file to Discord.
 @bot.command(name="sendresults")
@@ -620,4 +626,6 @@ async def quiz_help(ctx):
 async def ping(ctx):
     await ctx.send("Pong!")
 
+from dotenv import load_dotenv
+load_dotenv()
 bot.run(os.getenv("QUIZBOTTOKEN"))
